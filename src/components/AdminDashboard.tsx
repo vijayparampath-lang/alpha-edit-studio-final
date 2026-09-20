@@ -11,7 +11,7 @@ import {
 import { 
   api, ExtendedPortfolioItem, AboutCMS, ContactCMS, SocialLinkCMS, 
   isSupabaseConfigured, SettingsCMS, StudioMetricsCMS, LiveProjectMetrics, 
-  subscribeToPortfolioChanges, initSupabaseConfig, saveCentralSupabaseConfig, getSupabaseConfig 
+  subscribeToPortfolioChanges, initSupabaseConfig, saveCentralSupabaseConfig, getSupabaseConfig, getSupabaseClient 
 } from '../lib/supabase';
 import { Service, Skill, Experience, Testimonial } from '../types';
 import finalLogo from '../assets/images/final-logo.jpg';
@@ -124,16 +124,45 @@ export default function AdminDashboard({ onClose }: AdminDashboardProps) {
   const categories = ['Logo Design', 'Social Media', 'Posters', 'Branding', 'Video Editing', 'Reels', 'Motion Graphics', 'UI Design'];
   const skillCategories = ['Design', 'Video', 'Branding', 'Other'];
 
-  // Check initial authentication and sync central Supabase config
+  // Check real Supabase Auth session and sync central Supabase config
   useEffect(() => {
-    const isAuth = sessionStorage.getItem('vj-admin-authenticated') === 'true';
-    if (isAuth) {
-      setIsAuthenticated(true);
-    }
-    initSupabaseConfig().then(cfg => {
+    let mounted = true;
+    let unsubscribe: (() => void) | undefined;
+
+    const initAuth = async () => {
+      const cfg = await initSupabaseConfig();
+
+      if (!mounted) return;
+
       if (cfg.url) setSbUrl(cfg.url);
       if (cfg.key) setSbAnonKey(cfg.key);
-    });
+
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+
+      const { data } = await supabase.auth.getSession();
+
+      if (mounted) {
+        setIsAuthenticated(!!data.session);
+      }
+
+      const { data: authListener } = supabase.auth.onAuthStateChange(
+        (_event, session) => {
+          if (mounted) {
+            setIsAuthenticated(!!session);
+          }
+        }
+      );
+
+      unsubscribe = () => authListener.subscription.unsubscribe();
+    };
+
+    initAuth();
+
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
   }, []);
 
   // Fetch all CMS data when authenticated, subscribe to real-time changes, and handle tab visibility
@@ -198,24 +227,46 @@ export default function AdminDashboard({ onClose }: AdminDashboardProps) {
     setTimeout(() => setSaveMessage(null), 4000);
   };
 
-  // Login handler
-  const handleLogin = (e: React.FormEvent) => {
+  // Login handler - Supabase Auth
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const envUser = import.meta.env.VITE_ADMIN_USER || 'alphaeditstudio8@gmail.com';
-    const envPass = import.meta.env.VITE_ADMIN_PASS || 'adminpassword';
+    setAuthError('');
 
-    if (username === envUser && password === envPass) {
+    const email = username.trim();
+    const supabase = getSupabaseClient();
+
+    if (!supabase) {
+      setAuthError('Authentication service is not configured.');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        setAuthError('Invalid email or password.');
+        return;
+      }
+
       setIsAuthenticated(true);
-      sessionStorage.setItem('vj-admin-authenticated', 'true');
       setAuthError('');
-    } else {
-      setAuthError('Invalid credentials. Please verify your admin username and password.');
+    } catch (error) {
+      console.error('Admin login error:', error);
+      setAuthError('Unable to sign in. Please try again.');
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const supabase = getSupabaseClient();
+
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+
     setIsAuthenticated(false);
-    sessionStorage.removeItem('vj-admin-authenticated');
     window.history.pushState(null, '', '/');
     window.location.hash = '';
     onClose();
@@ -1240,11 +1291,6 @@ export default function AdminDashboard({ onClose }: AdminDashboardProps) {
                   />
                 </div>
 
-                <div className="p-3 bg-gray-950/40 rounded-xl border border-gray-900 text-[10px] font-mono text-gray-500 space-y-1 leading-relaxed">
-                  <p>🔑 <span className="font-bold text-gray-400">Default Demo Credentials:</span></p>
-                  <p>Email: <span className="text-amber-400">alphaeditstudio8@gmail.com</span></p>
-                  <p>Password: <span className="text-amber-400">adminpassword</span></p>
-                </div>
 
                 <button
                   type="submit"

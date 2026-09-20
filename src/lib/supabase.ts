@@ -211,8 +211,8 @@ export const getSupabaseClient = () => {
     try {
       cachedClient = createClient<any>(url, key, {
         auth: {
-          persistSession: false,
-          autoRefreshToken: false,
+          persistSession: true,
+          autoRefreshToken: true,
         }
       });
       cachedConfigKey = configKey;
